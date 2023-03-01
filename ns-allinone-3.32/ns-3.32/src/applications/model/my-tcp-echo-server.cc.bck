@@ -1,0 +1,322 @@
+/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
+/*
+ * Copyright 2007 University of Washington
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation;
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
+
+#include "ns3/log.h"
+#include "ns3/ipv4-address.h"
+#include "ns3/address-utils.h"
+#include "ns3/nstime.h"
+#include "ns3/inet-socket-address.h"
+#include "ns3/socket.h"
+#include "ns3/tcp-socket.h"
+#include "ns3/simulator.h"
+#include "ns3/socket-factory.h"
+#include "ns3/packet.h"
+#include "ns3/uinteger.h"
+#include "my-tcp-echo-server.h"
+#include "ns3/tag.h"
+#include "mytag.h"
+#include "TimestampTag.h"
+#include  "string.h"
+
+namespace ns3 {
+
+NS_LOG_COMPONENT_DEFINE ("MyTcpEchoServerApplication");
+NS_OBJECT_ENSURE_REGISTERED (MyTcpEchoServer);
+
+TypeId
+MyTcpEchoServer::GetTypeId (void)
+{
+  static TypeId tid = TypeId ("ns3::MyTcpEchoServer")
+      .SetParent<Application> ()
+      .AddConstructor<MyTcpEchoServer> ()
+      .AddAttribute ("Local", "The Address on which to Bind the rx socket.",
+                     AddressValue (),
+                     MakeAddressAccessor (&MyTcpEchoServer::m_local),
+                     MakeAddressChecker ())
+      .AddAttribute ("Port", "Port on which we listen for incoming packets.",
+                     UintegerValue (9),
+                     MakeUintegerAccessor (&MyTcpEchoServer::m_port),
+                     MakeUintegerChecker<uint16_t> ())
+  ;
+  return tid;
+}
+
+MyTcpEchoServer::MyTcpEchoServer ()
+{
+  NS_LOG_FUNCTION (this);
+}
+
+MyTcpEchoServer::~MyTcpEchoServer()
+{
+  NS_LOG_FUNCTION (this);
+  m_socket = 0;
+}
+
+void
+MyTcpEchoServer::DoDispose (void)
+{
+  NS_LOG_FUNCTION (this);
+  Application::DoDispose ();
+}
+
+void MyTcpEchoServer::SetPacketSizes(uint32_t * sizes){
+  m_PacketSizes = sizes;
+}
+
+
+uint32_t * MyTcpEchoServer::GetPacketSizes(){
+
+  return m_PacketSizes;
+}
+
+
+uint32_t MyTcpEchoServer::returnElement(uint32_t *arr, int length, int index){
+  for (int i=0;i<length;i++){
+    if(i==index){
+      return arr[index];
+    }
+  }
+  return -1;
+}
+
+
+
+void
+MyTcpEchoServer::StartApplication (void)
+{
+  NS_LOG_FUNCTION (this);
+  NS_LOG_FUNCTION ("m_local: " << m_local);
+  NS_LOG_FUNCTION ("m_local" << m_port);
+
+  if (m_socket == 0)
+  {
+    TypeId tid = TypeId::LookupByName ("ns3::TcpSocketFactory");
+    m_socket = Socket::CreateSocket (GetNode (), tid);
+    //InetSocketAddress local = InetSocketAddress (m_local, m_port);
+    //InetSocketAddress local = InetSocketAddress (InetSocketAddress::ConvertFrom (m_local).GetIpv4 (), m_port);
+    InetSocketAddress local = InetSocketAddress (Ipv4Address::GetAny (), m_port);
+
+    //InetSocketAddress::ConvertFrom (from).GetIpv4 ()
+    NS_LOG_FUNCTION ("InetSocketAddress local" << local.GetIpv4());
+ 
+    //int res = m_socket->Bind (local);
+
+    if (m_socket->Bind (local) == -1)
+    {
+      NS_FATAL_ERROR ("Failed to bind socket");
+    }
+    
+    m_socket->Listen();
+
+    NS_LOG_INFO("Echo Server local address:  " << m_local << " port: " << m_port << " bind: " );
+  }
+
+  m_socket->SetRecvPktInfo (true);
+
+  m_socket->SetRecvCallback (
+      MakeCallback (&MyTcpEchoServer::HandleRead, this));
+
+  m_socket->SetAcceptCallback (
+      MakeNullCallback<bool, Ptr<Socket>, const Address &> (),
+      MakeCallback (&MyTcpEchoServer::HandleAccept, this));
+
+  m_socket->SetCloseCallbacks(
+      MakeCallback(&MyTcpEchoServer::HandleClose, this),
+      MakeCallback(&MyTcpEchoServer::HandleClose, this));
+}
+
+void MyTcpEchoServer::HandleClose(Ptr<Socket> s1)
+{
+  NS_LOG_INFO(this);
+
+//  if (s1->m_pair) {
+//    s1->m_pair->Close();
+//    s1->m_pair->m_pair = NULL;
+//    s1->m_pair = NULL;
+//  }
+}
+
+//bool MyTcpEchoServer::HandleAcceptRequest (Ptr<Socket> s, const Address& from)
+//{
+//  NS_LOG_INFO(" HANDLE ACCEPT REQUEST FROM " <<  InetSocketAddress::ConvertFrom(from));
+//  return true;
+//}
+
+void MyTcpEchoServer::HandleAccept (Ptr<Socket> s, const Address& from)
+{
+  NS_LOG_FUNCTION (this << s << from);
+  NS_LOG_INFO("ACCEPT IN ECHO SERVER from " << InetSocketAddress::ConvertFrom(from).GetIpv4());
+  s->SetRecvCallback (MakeCallback (&MyTcpEchoServer::HandleRead, this));
+
+
+  Ptr<Socket> new_socket = Socket::CreateSocket(GetNode(), TypeId::LookupByName("ns3::TcpSocketFactory"));
+  
+  Ipv4Address src = InetSocketAddress::ConvertFrom (from).GetIpv4 ();
+
+  InetSocketAddress remote = InetSocketAddress (src, m_port);
+  
+  int ret = new_socket->Bind(remote);
+  
+  if (ret == -1)
+    {
+      NS_FATAL_ERROR ("Failed to bind new_socket");
+    }
+  new_socket->Listen();
+
+  new_socket->m_orgSrcIP = InetSocketAddress::ConvertFrom(from).GetIpv4();
+  new_socket->m_orgSrcPort = InetSocketAddress::ConvertFrom(from).GetPort();
+  NS_LOG_INFO(" CONNECT TO " << InetSocketAddress::ConvertFrom (from).GetIpv4 () << " : " << m_port); 
+  //new_socket->Connect(InetSocketAddress(InetSocketAddress::ConvertFrom (from).GetIpv4 (), m_port));
+  
+  //new_socket->Connect (InetSocketAddress (Ipv4Address::ConvertFrom(from), m_port));
+  new_socket->Connect (InetSocketAddress (src, m_port));
+  new_socket->SetRecvCallback (MakeCallback (&MyTcpEchoServer::HandleRead, this));
+
+
+}
+
+void
+MyTcpEchoServer::StopApplication ()
+{
+  NS_LOG_FUNCTION (this);
+
+  if (m_socket != 0)
+  {
+    m_socket->Close ();
+    m_socket->SetRecvCallback (MakeNullCallback<void, Ptr<Socket> > ());
+  }
+}
+
+
+void
+MyTcpEchoServer::HandleRead (Ptr<Socket> socket)
+{
+  NS_LOG_FUNCTION(this << socket);
+
+  Ptr<Packet> packet;
+  Address from;
+  Address localAddress;
+
+  while (packet = socket->RecvFrom (from))
+  {
+
+    uint8_t *msg;
+    //msg = new uint8_t[packet->GetSize()];
+    //packet->CopyData(msg, packet->GetSize());
+
+    socket->GetSockName(localAddress);
+    m_rxTrace(packet);
+    m_rxTraceWithAddresses(packet, from, localAddress);
+    if (InetSocketAddress::IsMatchingType(from)) {
+        NS_LOG_INFO("At time "
+                     << Simulator::Now().As(Time::S) << " server received "
+                     << packet->GetSize() << " bytes from "
+                     << InetSocketAddress::ConvertFrom(from).GetIpv4() << " port "
+                     << InetSocketAddress::ConvertFrom(from).GetPort());
+      } else if (Inet6SocketAddress::IsMatchingType(from)) {
+        NS_LOG_INFO("At time "
+                     << Simulator::Now().As(Time::S) << " server received "
+                     << packet->GetSize() << " bytes from "
+                     << Inet6SocketAddress::ConvertFrom(from).GetIpv6() << " port "
+                     << Inet6SocketAddress::ConvertFrom(from).GetPort());
+      }
+
+
+
+    //OUR LOGIC
+
+    uint8_t ttl = 0;
+    MyTag tag;
+    bool found = packet->RemovePacketTag(tag);
+
+    if (!found) {
+        NS_LOG_LOGIC("cannot read tag and ttl");
+        return;
+      }
+
+    ttl = tag.GetSimpleValue();
+    NS_LOG_LOGIC("ttl:" << +ttl);
+
+    if (+ttl == 1) {
+        NS_LOG_LOGIC("ttl is 1 server aborting packet cycle!");
+        TimestampTag timestampTag;
+        bool foundTimeStampTag =packet->RemovePacketTag(timestampTag);
+        if (foundTimeStampTag){
+            NS_LOG_LOGIC("delay: " << Simulator::Now().GetNanoSeconds() - timestampTag.GetTimestamp().GetNanoSeconds ());
+            NS_LOG_LOGIC("not delay: " << timestampTag.GetTimestamp().GetNanoSeconds () - timestampTag.GetTimestamp().GetNanoSeconds ());
+
+          }else{
+            NS_LOG_LOGIC("cannot find timestamp tag!");
+          }
+
+        return;
+      }
+
+    //packet->RemoveAllPacketTags();
+    tag.SetSimpleValue(--ttl);
+
+    ////////
+    uint32_t *arr = GetPacketSizes();
+    uint32_t newSize = returnElement(arr, 10, 10-(+ttl));
+    uint32_t packetSize = packet->GetSize ();
+    NS_LOG_LOGIC("newSize ::"<< newSize);
+    NS_LOG_LOGIC("old packetsize ::"<< packetSize);
+
+    if (newSize < packetSize){
+
+        NS_LOG_LOGIC("packet->RemoveAtEnd( newSize - packet->GetSize () );");
+        packet->RemoveAtEnd2( abs(newSize - packetSize) );
+
+
+      }else if (newSize > packetSize){
+
+        NS_LOG_LOGIC("packet->AddPaddingAtEnd(packet->GetSize () - newSize );");
+        packet->AddPaddingAtEnd( abs(newSize - packetSize) );
+
+      }else{
+
+        NS_LOG_LOGIC(" packet size does not change");
+
+      }
+    //////
+
+    NS_LOG_LOGIC("updated packet size ::"<< packet->GetSize ());
+
+    packet->AddPacketTag(tag);
+    socket->SendTo(packet, 0, from);
+
+    if (InetSocketAddress::IsMatchingType(from)) {
+        NS_LOG_INFO("At time " << Simulator::Now().As(Time::S) << " server sent "
+                                << " from "<< InetSocketAddress::ConvertFrom(localAddress).GetIpv4() << " "
+                                << packet->GetSize() << " bytes to "
+                                << InetSocketAddress::ConvertFrom(from).GetIpv4()
+                                << " port "
+                                << InetSocketAddress::ConvertFrom(from).GetPort());
+      } else if (Inet6SocketAddress::IsMatchingType(from)) {
+        NS_LOG_INFO("At time "
+                     << Simulator::Now().As(Time::S) << " server sent "
+                     << packet->GetSize() << " bytes to "
+                     << Inet6SocketAddress::ConvertFrom(from).GetIpv6() << " port "
+                     << Inet6SocketAddress::ConvertFrom(from).GetPort());
+      }
+
+
+  }
+}
+
+} // Namespace ns3
